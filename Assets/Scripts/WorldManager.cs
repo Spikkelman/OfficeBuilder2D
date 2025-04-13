@@ -3,151 +3,192 @@ using UnityEngine;
 using UnityEngine.UI;
 using TMPro;
 using UnityEngine.SceneManagement;
+using UnityEngine.Networking;
+using System.Collections;
 
 public class WorldManager : MonoBehaviour
 {
-    // --- UI References for World Creation ---
     [Header("World Creation Panel")]
     public TMP_InputField worldNameInput;
     public Button createWorldButton;
     public TMP_Text creationFeedbackText;
 
-    // --- UI References for World Overview ---
     [Header("World Overview Panel")]
-    // Parent object (e.g., Content panel of a ScrollView) where world buttons will be added
     public Transform overviewContentPanel;
-    // Prefab for a single world overview entry (must contain a Button and a TMP_Text for the world name)
     public GameObject worldButtonPrefab;
 
-    // --- Data Model: List of worlds owned by the user ---
     private List<WorldData> userWorlds = new List<WorldData>();
+    private string baseUrl = "http://localhost:5136/api/worlds";
 
     [System.Serializable]
     public class WorldData
     {
+        public int id;
         public string worldName;
-        // In a full implementation you could add additional fields (unique ID, associated 2D object data, etc.)
+        public int userId;
+    }
+
+    [System.Serializable]
+    public class CreateWorldRequest
+    {
+        public string worldName;
+    }
+
+    [System.Serializable]
+    public class WorldListWrapper
+    {
+        public List<WorldData> worlds;
     }
 
     void Start()
     {
-        // Clear any feedback text at startup
         creationFeedbackText.text = "";
+        createWorldButton.onClick.RemoveAllListeners(); //prevents duplicates
+        createWorldButton.onClick.AddListener(() =>
+        {
+            Debug.Log("Create button clicked.");
+            StartCoroutine(CreateWorldRequestRoutine());
+        });
 
-        // Hook up the button for creating a new world
-        createWorldButton.onClick.AddListener(CreateWorld);
-
-        // Populate the overview list (if there are pre‑existing worlds)
-        PopulateOverview();
+        StartCoroutine(GetWorldsRoutine());
     }
 
-    // --- World Creation ---
-    void CreateWorld()
+    IEnumerator GetWorldsRoutine()
+    {
+        string token = PlayerPrefs.GetString("auth_token");
+        if (string.IsNullOrEmpty(token))
+        {
+            creationFeedbackText.text = "Not logged in.";
+            yield break;
+        }
+
+        UnityWebRequest request = UnityWebRequest.Get(baseUrl + "/overview");
+        request.SetRequestHeader("Authorization", "Bearer " + token);
+
+        yield return request.SendWebRequest();
+
+        Debug.Log("GET /worlds/overview response code: " + request.responseCode);
+
+        if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
+        {
+            string rawJson = request.downloadHandler.text;
+            Debug.Log("Worlds JSON: " + rawJson);
+
+            string wrappedJson = "{\"worlds\":" + rawJson + "}";
+            WorldListWrapper wrapper = JsonUtility.FromJson<WorldListWrapper>(wrappedJson);
+            userWorlds = wrapper.worlds ?? new List<WorldData>();
+
+            PopulateOverview();
+        }
+        else
+        {
+            creationFeedbackText.text = "Failed to load worlds.";
+            Debug.LogError("Worlds fetch failed: " + request.downloadHandler.text);
+        }
+    }
+
+    IEnumerator CreateWorldRequestRoutine()
     {
         string nameInput = worldNameInput.text.Trim();
-
-        // Validation: world name must be between 1 and 25 characters
-        if (string.IsNullOrEmpty(nameInput))
-        {
-            creationFeedbackText.text = "World name cannot be empty.";
-            return;
-        }
-        if (nameInput.Length < 1 || nameInput.Length > 25)
+        if (string.IsNullOrEmpty(nameInput) || nameInput.Length > 25)
         {
             creationFeedbackText.text = "World name must be between 1 and 25 characters.";
-            return;
-        }
-        // Check for duplicate world name
-        foreach (var world in userWorlds)
-        {
-            if (world.worldName == nameInput)
-            {
-                creationFeedbackText.text = "A world with this name already exists.";
-                return;
-            }
-        }
-        // Check maximum number of worlds (5)
-        if (userWorlds.Count >= 5)
-        {
-            creationFeedbackText.text = "You cannot create more than 5 worlds.";
-            return;
+            yield break;
         }
 
-        // If validations pass, create a new world and add it to the user's list
-        WorldData newWorld = new WorldData
+        string token = PlayerPrefs.GetString("auth_token");
+        Debug.Log("Sending POST request to create world...");
+        CreateWorldRequest payload = new CreateWorldRequest { worldName = nameInput };
+        string jsonData = JsonUtility.ToJson(payload);
+
+        UnityWebRequest request = new UnityWebRequest(baseUrl + "/create", "POST");
+        byte[] bodyRaw = System.Text.Encoding.UTF8.GetBytes(jsonData);
+        request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+        request.downloadHandler = new DownloadHandlerBuffer();
+        request.SetRequestHeader("Content-Type", "application/json");
+        request.SetRequestHeader("Authorization", "Bearer " + token);
+
+        yield return request.SendWebRequest();
+
+        Debug.Log("POST /worlds/create response code: " + request.responseCode);
+
+        if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
         {
-            worldName = nameInput
-        };
-
-        userWorlds.Add(newWorld);
-        creationFeedbackText.text = "World created successfully!";
-
-        // Optionally, clear the input field
-        worldNameInput.text = "";
-
-        // Refresh the overview list to show the new world
-        PopulateOverview();
+            creationFeedbackText.text = "World created.";
+            worldNameInput.text = "";
+            yield return new WaitForSeconds(0.3f); // slight delay to ensure DB updates
+            StartCoroutine(GetWorldsRoutine());
+        }
+        else
+        {
+            creationFeedbackText.text = "Creation failed: " + request.downloadHandler.text;
+            Debug.LogError("CreateWorld Error: " + request.downloadHandler.text);
+        }
     }
 
-    // --- Populate the World Overview List ---
+    public void DeleteWorld(WorldData worldToDelete)
+    {
+        StartCoroutine(DeleteWorldRoutine(worldToDelete));
+    }
+
+    IEnumerator DeleteWorldRoutine(WorldData world)
+    {
+        string token = PlayerPrefs.GetString("auth_token");
+        UnityWebRequest request = UnityWebRequest.Delete(baseUrl + "/" + world.id);
+        request.SetRequestHeader("Authorization", "Bearer " + token);
+
+        yield return request.SendWebRequest();
+
+        if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
+        {
+            creationFeedbackText.text = "World deleted.";
+            StartCoroutine(GetWorldsRoutine());
+        }
+        else
+        {
+            creationFeedbackText.text = "Deletion failed: " + request.downloadHandler.text;
+            Debug.LogError("DeleteWorld Error: " + request.downloadHandler.text);
+        }
+    }
+
     void PopulateOverview()
     {
-        // Clear current overview list
         foreach (Transform child in overviewContentPanel)
-        {
             Destroy(child.gameObject);
-        }
 
-        // Create a button for each world
+        Debug.Log("Populating " + userWorlds.Count + " worlds");
+
         foreach (var world in userWorlds)
         {
             GameObject newButton = Instantiate(worldButtonPrefab, overviewContentPanel);
-            // Set the button text to the world's name (using TMP_Text)
             TMP_Text buttonText = newButton.GetComponentInChildren<TMP_Text>();
-            if (buttonText != null)
-            {
-                buttonText.text = world.worldName;
-            }
+            if (buttonText != null) buttonText.text = world.worldName;
 
-            // Hook up the button click to load/view the world
             Button btn = newButton.GetComponent<Button>();
             if (btn != null)
             {
-                // Use a local copy of world to avoid closure issues
-                WorldData currentWorld = world;
-                btn.onClick.AddListener(() => OnWorldSelected(currentWorld));
+                WorldData localCopy = world;
+                btn.onClick.AddListener(() => OnWorldSelected(localCopy));
             }
 
-            // Delete button
             Transform deleteBtnTransform = newButton.transform.Find("DeleteButton");
-            if(deleteBtnTransform != null)
+            if (deleteBtnTransform != null)
             {
-                 Button deleteBtn = deleteBtnTransform.GetComponent<Button>();
+                Button deleteBtn = deleteBtnTransform.GetComponent<Button>();
                 deleteBtn.onClick.AddListener(() => DeleteWorld(world));
             }
         }
     }
 
-    // --- When a World is Selected for Viewing ---
     void OnWorldSelected(WorldData world)
     {
-        Debug.Log("Viewing world: " + world.worldName);
-        // Here you would pass the world data (via a static manager or similar)
-        // and load the scene for viewing/editing that world.
-        // For example:
-        // SelectedWorldData.worldName = world.worldName;
-        // SceneManager.LoadScene("WorldEditScene");
-    }
+        Debug.Log("Opening world: " + world.worldName);
 
-    // --- Delete a World (and its associated 2D objects) ---
-    // This method can be called from a delete button attached to a world entry.
-    public void DeleteWorld(WorldData worldToDelete)
-    {
-        userWorlds.Remove(worldToDelete);
-        Debug.Log("Deleted world: " + worldToDelete.worldName);
-        // In a complete implementation, you would also remove associated 2D objects for that world.
+         // Opslaan in static class
+        SelectedWorld.WorldId = world.id;
+        SelectedWorld.WorldName = world.worldName;
 
-        // Refresh the overview list
-        PopulateOverview();
+        // Scene wisselen
+        SceneManager.LoadScene("WorldOverviewScene"); // Pas deze naam aan aan jouw scene
     }
 }

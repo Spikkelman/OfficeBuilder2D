@@ -1096,6 +1096,8 @@ MonoBehaviour:
   loginButton: {fileID: 105879086}
   registerButton: {fileID: 697147285}
   errorText: {fileID: 579449618}
+  loginUrl: http://localhost:5136/api/auth/login
+  registerUrl: http://localhost:5136/api/auth/register
 --- !u!4 &662080325
 Transform:
   m_ObjectHideFlags: 0

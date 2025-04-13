@@ -1,66 +1,137 @@
 using UnityEngine;
 using UnityEngine.UI;
-using TMPro; // TextMeshPro < Forgot to add this due to using TMP_Text
-using UnityEngine.SceneManagement; // In case you want to load a new scene on success
+using TMPro;
+using UnityEngine.SceneManagement;
+using UnityEngine.Networking;
+using System.Collections;
+using System.Text;
 
 public class LoginManager : MonoBehaviour
 {
-    // References to the UI elements; assign these in the Inspector.
+    [Header("UI Elements")]
     public TMP_InputField usernameInput;
     public TMP_InputField passwordInput;
     public Button loginButton;
     public Button registerButton;
     public TMP_Text errorText;
 
+    [Header("API URLs")]
+    public string loginUrl = "http://localhost:5136/api/auth/login";
+    public string registerUrl = "http://localhost:5136/api/auth/register";
+
     void Start()
     {
-        // Clear any error messages at startup.
         errorText.text = "";
-
-        // Add listeners for the button clicks.
-        loginButton.onClick.AddListener(HandleLogin);
-        registerButton.onClick.AddListener(HandleRegister);
+        loginButton.onClick.AddListener(() => StartCoroutine(SendLoginRequest()));
+        registerButton.onClick.AddListener(() => StartCoroutine(SendRegisterRequest()));
     }
 
-    // Called when the login button is clicked.
-    void HandleLogin()
+    IEnumerator SendLoginRequest()
     {
-        // Get user input.
-        string username = usernameInput.text;
-        string password = passwordInput.text;
+        string username = usernameInput.text.Trim();
+        string password = passwordInput.text.Trim();
 
-        // Simple input validation.
         if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
         {
-            errorText.text = "Username or password cannot be empty.";
-            return;
+            errorText.text = "Gebruikersnaam en wachtwoord zijn verplicht.";
+            yield break;
         }
 
-        // Here you would normally call your back-end API to verify credentials.
-        // For demonstration, we simulate a simple check:
-        if (username == "test" && password == "Password123!")
-        {
-            // Login successful.
-            errorText.text = "";
-            Debug.Log("Login successful!");
+        errorText.text = "Bezig met inloggen...";
 
-            // Optionally, load the next scene.
-            SceneManager.LoadScene("WorldEditScene");
-        }
-        else
+        LoginRequest payload = new LoginRequest { Username = username, Password = password };
+        string jsonData = JsonUtility.ToJson(payload);
+
+        using (UnityWebRequest request = new UnityWebRequest(loginUrl, "POST"))
         {
-            // Display an error message.
-            errorText.text = "Invalid username or password.";
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
+            {
+                LoginResponse response = JsonUtility.FromJson<LoginResponse>(request.downloadHandler.text);
+                PlayerPrefs.SetString("auth_token", response.token);
+                SceneManager.LoadScene("WorldEditScene");
+            }
+            else
+            {
+                errorText.text = request.downloadHandler.text;
+                Debug.LogError("Login error: " + request.downloadHandler.text);
+            }
         }
     }
 
-    // Called when the register button is clicked.
-    void HandleRegister()
+    IEnumerator SendRegisterRequest()
     {
-        // You can either load a registration scene or show a registration form.
-        Debug.Log("Register button clicked.");
+        string username = usernameInput.text.Trim();
+        string password = passwordInput.text.Trim();
 
-        // For example, to load a registration scene:
-        // SceneManager.LoadScene("RegisterScene");
+        if (string.IsNullOrEmpty(username) || string.IsNullOrEmpty(password))
+        {
+            errorText.text = "Gebruikersnaam en wachtwoord zijn verplicht.";
+            yield break;
+        }
+
+        if (!IsValidPassword(password))
+        {
+            errorText.text = "Wachtwoord moet minimaal 10 tekens bevatten, met hoofdletter, kleine letter, cijfer en speciaal teken.";
+            yield break;
+        }
+
+        LoginRequest payload = new LoginRequest { Username = username, Password = password };
+        string jsonData = JsonUtility.ToJson(payload);
+
+        using (UnityWebRequest request = new UnityWebRequest(registerUrl, "POST"))
+        {
+            byte[] bodyRaw = Encoding.UTF8.GetBytes(jsonData);
+            request.uploadHandler = new UploadHandlerRaw(bodyRaw);
+            request.downloadHandler = new DownloadHandlerBuffer();
+            request.SetRequestHeader("Content-Type", "application/json");
+
+            yield return request.SendWebRequest();
+
+            if (request.result == UnityWebRequest.Result.Success && request.responseCode == 200)
+            {
+                errorText.text = "Registratie gelukt! Je kunt nu inloggen.";
+            }
+            else
+            {
+                errorText.text = request.downloadHandler.text;
+                Debug.LogError("Register error: " + request.downloadHandler.text);
+            }
+        }
+    }
+
+    bool IsValidPassword(string password)
+    {
+        if (password.Length < 10) return false;
+
+        bool hasLower = false, hasUpper = false, hasDigit = false, hasSpecial = false;
+        foreach (char c in password)
+        {
+            if (char.IsLower(c)) hasLower = true;
+            else if (char.IsUpper(c)) hasUpper = true;
+            else if (char.IsDigit(c)) hasDigit = true;
+            else if (!char.IsLetterOrDigit(c)) hasSpecial = true;
+        }
+
+        return hasLower && hasUpper && hasDigit && hasSpecial;
+    }
+
+    [System.Serializable]
+    public class LoginRequest
+    {
+        public string Username;
+        public string Password;
+    }
+
+    [System.Serializable]
+    public class LoginResponse
+    {
+        public string token;
     }
 }
